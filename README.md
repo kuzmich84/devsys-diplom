@@ -1,35 +1,13 @@
 # Курсовая работа по итогам модуля "DevOps и системное администрирование"
 
-Курсовая работа необходима для проверки практических навыков, полученных в ходе прохождения курса "DevOps и системное администрирование".
-
-Мы создадим и настроим виртуальное рабочее место. Позже вы сможете использовать эту систему для выполнения домашних заданий по курсу
-
-## Задание
-
-1. Создайте виртуальную машину Linux.
-2. Установите ufw и разрешите к этой машине сессии на порты 22 и 443, при этом трафик на интерфейсе localhost (lo) должен ходить свободно на все порты.
-3. Установите hashicorp vault ([инструкция по ссылке](https://learn.hashicorp.com/tutorials/vault/getting-started-install?in=vault/getting-started#install-vault)).
-4. Cоздайте центр сертификации по инструкции ([ссылка](https://learn.hashicorp.com/tutorials/vault/pki-engine?in=vault/secrets-management)) и выпустите сертификат для использования его в настройке веб-сервера nginx (срок жизни сертификата - месяц).
-5. Установите корневой сертификат созданного центра сертификации в доверенные в хостовой системе.
-6. Установите nginx.
-7. По инструкции ([ссылка](https://nginx.org/en/docs/http/configuring_https_servers.html)) настройте nginx на https, используя ранее подготовленный сертификат:
-  - можно использовать стандартную стартовую страницу nginx для демонстрации работы сервера;
-  - можно использовать и другой html файл, сделанный вами;
-8. Откройте в браузере на хосте https адрес страницы, которую обслуживает сервер nginx.
-9. Создайте скрипт, который будет генерировать новый сертификат в vault:
-  - генерируем новый сертификат так, чтобы не переписывать конфиг nginx;
-  - перезапускаем nginx для применения нового сертификата.
-10. Поместите скрипт в crontab, чтобы сертификат обновлялся какого-то числа каждого месяца в удобное для вас время.
-
-## Результат
-
-Результатом курсовой работы должны быть снимки экрана или текст:
-
 ### 1. Процесс установки и настройки ufw
 
 UFW уже установлен в Ubuntu 20.04 server.
 
-![img.png](img.png)
+```shell
+dmitry@ubuntu-server:~$ ufw version
+ufw 0.36
+```
 
 Установим правила UFW по умолчанию, запретим все входящие и разрешим все исходящие:
 
@@ -83,142 +61,140 @@ dmitry@ubuntu-server:~$ sudo apt-add-repository "deb [arch=amd64] https://apt.re
 dmitry@ubuntu-server:~$ sudo apt-get update && sudo apt-get install vault
 
 ```
-Устанавливаем jq:
 
+Разрешаем автозапуск службы и если она не запущена, стартуем ее:
 ```shell
-dmitry@ubuntu-server:~$ sudo apt-get install jq
+dmitry@ubuntu-server:~$ sudo systemctl enable vault --now
+Created symlink /etc/systemd/system/multi-user.target.wants/vault.service → /lib/systemd/system/vault.service
 ```
 
-Сконфигурируем Vault c помощью файла config.hcl: 
+#### Настроим рабочее окружение
+
+Будем подключаться к vault по http.
+Раскоментируем строки в файле vault.hcl:
 
 ```shell
-storage "raft" {
-  path    = "./vault/data"
-  node_id = "node1"
-}
-
+# HTTP listener
 listener "tcp" {
-  address     = "127.0.0.1:8200"
-  tls_disable = "true"
+  address = "127.0.0.1:8200"
+  tls_disable = 1
 }
-
-api_addr = "http://127.0.0.1:8200"
-cluster_addr = "https://127.0.0.1:8201"
-ui = true
+```
+Закомметируем 
+```shell
+# HTTPS listener
+#listener "tcp" {
+ # address       = "0.0.0.0:8200"
+  #tls_cert_file = "/opt/vault/tls/tls.crt"
+  #tls_key_file  = "/opt/vault/tls/tls.key"
+#}
 ```
 
-Запуск сервера Vault: 
-
+Перезапустим службу vault
 ```shell
-dmitry@ubuntu-server:~$ mkdir -p ./vault/data
-dmitry@ubuntu-server:~$ vault server -config=config.hcl
-==> Vault server configuration:
-
-             Api Address: http://127.0.0.1:8200
-                     Cgo: disabled
-         Cluster Address: https://127.0.0.1:8201
-              Go Version: go1.17.5
-              Listener 1: tcp (addr: "127.0.0.1:8200", cluster address: "127.0.0.1:8201", max_request_duration: "1m30s", max_request_size: "33554432", tls: "disabled")
-               Log Level: info
-                   Mlock: supported: true, enabled: true
-           Recovery Mode: false
-                 Storage: raft (HA available)
-                 Version: Vault v1.9.2
-             Version Sha: f4c6d873e2767c0d6853b5d9ffc77b0d297bfbdf
-
-==> Vault server started! Log data will stream in below:
+dmitry@ubuntu-server:~$ sudo systemctl restart vault
+```
+Запишем системную переменную VAULT_ADDR=http://127.0.0.1:8200 в файл, чтобы она создавалась каждый раз при входе в систему
+```shell
+dmitry@ubuntu-server:~$ sudo nano /etc/environment 
 ```
 
-Запустим новый терминал и установим VAULT_ADDR и инициализируем хранилище:
+Создадим автоматическое распечатывание vault: 
 ```shell
-dmitry@ubuntu-server:~$ export VAULT_ADDR='http://127.0.0.1:8200'
 dmitry@ubuntu-server:~$ vault operator init
-
+Unseal Key 1: DGFRnvt/LKcbHokCdpvKlZF/CLocHRikIICVay9CNI3e
+Unseal Key 2: fKQ4/W2X9UF+epg2l0MJV+sGBgRPO0T6Kb8wJqFsId2S
+Unseal Key 3: hDrs4KvpVHySjsSlhUgPenXK+B+BfnlSfhIbDfDnQxn2
+Unseal Key 4: QFQn7llR4W/4v0hnYAQyX4roQPB+XSiVcTidhjxxSYAs
+Unseal Key 5: GaqT8b/t1uwMAcAoo1JSpOxCmB6rNHBFf3VMqRmmBhUJ
 ```
-В результате получим:
-```shell
-Unseal Key 1: 4C1MmYfsqyDgPisKrNl00FUKDjZbI+2GfJl54h9JlLzB
-Unseal Key 2: PCzq6lx0t2g0GZPn5/SPW+DMmxhl8QaAkYBboyIkZqt+
-Unseal Key 3: sh/7gonWVbb1p6IZm9mqHUELNPVOfTvv8cY/Y6QyAPvZ
-Unseal Key 4: lnV0KobS2twqaxPr4O7pvfCyll/Zezj+Ot+yFPdRNB6w
-Unseal Key 5: RzV2xgTr3Ds7nWSnyUVzkyf3FmXWb+PSdDcJLEFQ8odr
-
-Initial Root Token: s.AerNVclgYVtRyBpEx0bMPNNO
-```
-Распечатываем хранилище: 
-```shell
-dmitry@ubuntu-server:~$ vault operator unseal
-Unseal Key (will be hidden): 
-Key                Value
----                -----
-Seal Type          shamir
-Initialized        true
-Sealed             true
-Total Shares       5
-Threshold          3
-Unseal Progress    1/3
-Unseal Nonce       920ef0ef-18cf-3051-e708-185bddd1867b
-Version            1.9.2
-Storage Type       raft
-HA Enabled         true
-dmitry@ubuntu-server:~$ vault operator unseal
-Unseal Key (will be hidden): 
-Key                Value
----                -----
-Seal Type          shamir
-Initialized        true
-Sealed             true
-Total Shares       5
-Threshold          3
-Unseal Progress    2/3
-Unseal Nonce       920ef0ef-18cf-3051-e708-185bddd1867b
-Version            1.9.2
-Storage Type       raft
-HA Enabled         true
-dmitry@ubuntu-server:~$ vault operator unseal
-Unseal Key (will be hidden): 
-Key                     Value
----                     -----
-Seal Type               shamir
-Initialized             true
-Sealed                  false
-Total Shares            5
-Threshold               3
-Version                 1.9.2
-Storage Type            raft
-Cluster Name            vault-cluster-963518b2
-Cluster ID              26321149-6ab3-8c9e-b558-88163695fbad
-HA Enabled              true
-HA Cluster              n/a
-HA Mode                 standby
-Active Node Address     <none>
-Raft Committed Index    25
-Raft Applied Index      25
-dmitry@ubuntu-server:~$ 
-
-```
-
-Пройдем процедуре аутентифиуации: 
+Создадим каталог для хранения скриптов:
 
 ```shell
-dmitry@ubuntu-server:~$ vault login s.AerNVclgYVtRyBpEx0bMPNNO
-Success! You are now authenticated. The token information displayed below
-is already stored in the token helper. You do NOT need to run "vault login"
-again. Future Vault requests will automatically use this token.
+dmitry@ubuntu-server:~$ sudo mkdir /scripts
+```
+Создадим скрипт 
+```shell
+#!/bin/bash
+PATH=/etc:/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin
 
-Key                  Value
----                  -----
-token                s.AerNVclgYVtRyBpEx0bMPNNO
-token_accessor       3UVFvFu6kJhicCPPI6jkCDVX
-token_duration       ∞
-token_renewable      false
-token_policies       ["root"]
-identity_policies    []
-policies             ["root"]
-
+sleep 10
+vault operator unseal DGFRnvt/LKcbHokCdpvKlZF/CLocHRikIICVay9CNI3e
+vault operator unseal fKQ4/W2X9UF+epg2l0MJV+sGBgRPO0T6Kb8wJqFsId2S
+vault operator unseal hDrs4KvpVHySjsSlhUgPenXK+B+BfnlSfhIbDfDnQxn2
 ```
 
-1. Cоздаем корневой CA:
+Разрешаем запуск скрипта на выполнение
+
+```shell
+dmitry@ubuntu-server:~$ sudo chmod +x /scripts/unseal.sh 
+```
+Выполним скрипт 
+```shell
+dmitry@ubuntu-server:~$ /scripts/unseal.sh
+```
+В результате получим распечатанный сервер
+```shell
+Key             Value
+---             -----
+Seal Type       shamir
+Initialized     true
+Sealed          false
+Total Shares    5
+Threshold       3
+Version         1.9.2
+Storage Type    file
+Cluster Name    vault-cluster-bff3bf90
+Cluster ID      08df0907-1c07-a909-94e9-0d56c337890b
+HA Enabled      false
+```
+
+Создадим автозапуcк скрипта при старте сервера. 
+
+Создаем юнит 
+```shell
+dmitry@ubuntu-server:~$ sudo nano /etc/systemd/system/vault-unseal.service
+
+[Unit]
+Description=Vault Auto Unseal Service
+After=network.target
+After=vault.service
+
+[Service]
+Environment="VAULT_ADDR=http://127.0.0.1:8200"
+ExecStart=/scripts/unseal.sh
+Type=oneshot
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Перечитаем конфигурацию для systemd:
+```shell
+dmitry@ubuntu-server:~$ sudo systemctl daemon-reload
+```
+Разрешаем автозапуск созданного сервиса:
+
+```shell
+dmitry@ubuntu-server:~$ sudo systemctl enable vault-unseal
+Created symlink /etc/systemd/system/multi-user.target.wants/vault-unseal.service → /etc/systemd/system/vault-unseal.service.
+```
+
+Теперь после перезагрузки сервера vault окажется распечатанным
+
+Доустанавливаем в систему утилиту «jq»
+```shell
+dmitry@ubuntu-server:~$ sudo apt install jq
+```
+
+Авторизуемся в vault
+
+```shell
+dmitry@ubuntu-server:~$ vault login  s.0lwZ7veroWS3LUaCA4XAPbza
+```   
+
+1) Создаем корневой центр сертификации (ЦС)
 
 ```shell
 dmitry@ubuntu-server:~$ vault secrets enable pki
@@ -230,13 +206,13 @@ dmitry@ubuntu-server:~$ vault write -field=certificate pki/root/generate/interna
 >      ttl=87600h > CA_cert.crt
 
 dmitry@ubuntu-server:~$ vault write pki/config/urls \
->      issuing_certificates="$VAULT_ADDR/v1/pki/ca" \
->      crl_distribution_points="$VAULT_ADDR/v1/pki/crl"
+>      issuing_certificates="http://127.0.0.1:8200/v1/pki/ca" \
+>      crl_distribution_points="http://127.0.0.1:8200/v1/pki/crl"
 Success! Data written to: pki/config/urls
-
 ```
-2. Создаем промежуточный CA:
+CA_cert.crt - добавим в доверенные сертификаты на хостовой машине.
 
+2) Создаем промежуточный ЦС
 ```shell
 dmitry@ubuntu-server:~$ vault secrets enable -path=pki_int pki
 Success! Enabled the pki secrets engine at: pki_int/
@@ -250,32 +226,33 @@ dmitry@ubuntu-server:~$ vault write -format=json pki/root/sign-intermediate csr=
 >      | jq -r '.data.certificate' > intermediate.cert.pem
 dmitry@ubuntu-server:~$ vault write pki_int/intermediate/set-signed certificate=@intermediate.cert.pem
 Success! Data written to: pki_int/intermediate/set-signed
-
-
 ```
-3. Создаем роль 
+
+3) Создаем роль 
 ```shell
 dmitry@ubuntu-server:~$ vault write pki_int/roles/example-dot-com \
 >      allowed_domains="example.com" \
 >      allow_subdomains=true \
 >      max_ttl="720h"
 Success! Data written to: pki_int/roles/example-dot-com
-
 ```
 
-4. Запросим сертификат для поддомена test.example.com и запишем его в виде json cert.json: 
-
+4) Создаем сертификат на 30 дней для test.example.com
 ```shell
-dmitry@ubuntu-server:~$ vault write -format=json pki_int/issue/example-dot-com common_name="test.example.com" ttl="720h" > cert.json
-
+dmitry@ubuntu-server:~$ vault write -format=json pki_int/issue/example-dot-com common_name="test.example.com" ttl="720h" > test.example.com.crt
 ```
 
+Сохраняем сертификат в правильном формате
+```shell
+dmitry@ubuntu-server:~$ cat test.example.com.crt | jq -r .data.certificate > test.example.com.crt.pem
+dmitry@ubuntu-server:~$ cat test.example.com.crt | jq -r .data.issuing_ca >> test.example.com.crt.pem
+dmitry@ubuntu-server:~$ cat test.example.com.crt | jq -r .data.private_key > test.example.com.crt.key
+```
 
 ### 3.Процесс установки и настройки сервера nginx
 
 ```shell
 dmitry@ubuntu-server:~$ sudo apt install nginx
-
 ```
 
 Настроим блок сервера для нашего домена test.example.com 
@@ -285,27 +262,85 @@ dmitry@ubuntu-server:~$ sudo mkdir -p /var/www/test.example.com/html
 dmitry@ubuntu-server:~$ sudo chmod -R 755 /var/www/test.example.com/
 dmitry@ubuntu-server:~$ /var/www/test.example.com/html/index.html
 dmitry@ubuntu-server:~$ sudo nano /etc/nginx/sites-available/test.example.com
-
 ```
 
-Подготовим файлы сертификатов для nginx и поместим в папку /etc/nginx/ssl:
+Перенесем файлы сертификатов в папку /etc/ssl 
 ```shell
-dmitry@ubuntu-server:~$ sudo mkdir /etc/nginx/ssl
-
-
+dmitry@ubuntu-server:~$ sudo mv test.example.com.crt.key /etc/ssl
+dmitry@ubuntu-server:~$ sudo mv test.example.com.crt.pem /etc/ssl
 ```
 
+Изменим конфигурацию nginx для test.example.com
 
-- Страница сервера nginx в браузере хоста не содержит предупреждений 
-- Скрипт генерации нового сертификата работает (сертификат сервера ngnix должен быть "зеленым")
-- Crontab работает (выберите число и время так, чтобы показать что crontab запускается и делает что надо)
+```shell
+server {
+        listen              443 ssl;
+        server_name test.example.com www.test.example.com;
 
-## Как сдавать курсовую работу
+        ssl_certificate     "/etc/ssl/test.example.com.crt.pem";
+        ssl_certificate_key "/etc/ssl/test.example.com.crt.key";
 
-Курсовую работу выполните в файле readme.md в github репозитории. В личном кабинете отправьте на проверку ссылку на .md-файл в вашем репозитории.
+        ssl_protocols       TLSv1 TLSv1.1 TLSv1.2;
+        ssl_ciphers         HIGH:!aNULL:!MD5;
 
-Также вы можете выполнить задание в [Google Docs](https://docs.google.com/document/u/0/?tgif=d) и отправить в личном кабинете на проверку ссылку на ваш документ.
-Если необходимо прикрепить дополнительные ссылки, просто добавьте их в свой Google Docs.
+        root /var/www/test.example.com/html;
+        index index.html index.htm index.nginx-debian.html;
 
-Перед тем как выслать ссылку, убедитесь, что ее содержимое не является приватным (открыто на комментирование всем, у кого есть ссылка), иначе преподаватель не сможет проверить работу. 
-Ссылка на инструкцию [Как предоставить доступ к файлам и папкам на Google Диске](https://support.google.com/docs/answer/2494822?hl=ru&co=GENIE.Platform%3DDesktop).
+
+
+        location / {
+                try_files $uri $uri/ =404;
+        }
+}
+```
+Рестартуем nginx 
+
+```shell
+dmitry@ubuntu-server:~$ sudo nginx -t
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+
+dmitry@ubuntu-server:~$ sudo systemctl restart nginx
+```
+Заходим на страницу test.example.com
+
+![img.png](img.png)
+
+Создаем скрипт для генерации сертификата 
+
+```shell
+dmitry@ubuntu-server:~$ sudo nano generate_sert
+#!/usr/bin/env bash
+
+vault write -format=json pki_int/issue/example-dot-com common_name="test.example.com" ttl="720h" > /home/dmitry/test.example.com.crt
+
+cat /home/dmitry/test.example.com.crt | jq -r .data.certificate > /etc/ssl/test.example.com.crt.pem
+cat /home/dmitry/test.example.com.crt | jq -r .data.issuing_ca >> /etc/ssl/test.example.com.crt.pem
+cat /home/dmitry/test.example.com.crt | jq -r .data.private_key > /etc/ssl/test.example.com.crt.key
+
+systemctl restart nginx.service
+```
+
+Для проверки в crontab поставим выполнения скрипта generate_sert каждую минуту
+```shell
+sudo crontab -e
+
+* * * * * /home/dmitry/generate_sert
+```
+и в результате получим: 
+
+```shell
+Jan 10 16:57:01 ubuntu-server CRON[1917]: (root) CMD (/home/dmitry/generate_sert)
+Jan 10 16:57:01 ubuntu-server systemd[1]: Stopping A high performance web server and a reverse proxy server...
+Jan 10 16:57:01 ubuntu-server systemd[1]: nginx.service: Succeeded.
+Jan 10 16:57:01 ubuntu-server systemd[1]: Stopped A high performance web server and a reverse proxy server.
+Jan 10 16:57:01 ubuntu-server systemd[1]: Starting A high performance web server and a reverse proxy server...
+Jan 10 16:57:01 ubuntu-server systemd[1]: Started A high performance web server and a reverse proxy server.
+```
+
+Настроим crontab, стобы он запуcкал скрипт один раз в месяц 10 числа в 03:30: 
+```shell
+sudo crontab -e
+
+30 3 10 * * /home/dmitry/generate_sert
+```
